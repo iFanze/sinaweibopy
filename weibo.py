@@ -9,13 +9,21 @@ Python client SDK for sina weibo API using OAuth 2.
 '''
 
 try:
-    from cStringIO import StringIO
+    from io import BytesIO as StringIO
 except ImportError:
-    from StringIO import StringIO
+    try:
+        from cStringIO import StringIO
+    except ImportError:
+        from StringIO import StringIO
 
-import gzip, time, json, hmac, base64, hashlib, urllib, urllib2, logging, mimetypes, collections
+import gzip, time, json, hmac, base64, hashlib, urllib, logging, mimetypes, collections
 
-class APIError(StandardError):
+try:
+    from urllib2 import urlopen
+except ImportError:
+    from urllib.request import urlopen
+
+class APIError(BaseException):
     '''
     raise APIError if receiving json message indicating failure.
     '''
@@ -23,7 +31,7 @@ class APIError(StandardError):
         self.error_code = error_code
         self.error = error
         self.request = request
-        StandardError.__init__(self, error)
+        BaseException.__init__(self, error)
 
     def __str__(self):
         return 'APIError: %s: %s, request: %s' % (self.error_code, self.error, self.request)
@@ -34,7 +42,7 @@ def _parse_json(s):
     def _obj_hook(pairs):
         ' convert json object to python object '
         o = JsonDict()
-        for k, v in pairs.iteritems():
+        for k, v in pairs.items():
             o[str(k)] = v
         return o
     return json.loads(s, object_hook=_obj_hook)
@@ -61,24 +69,24 @@ def _encode_params(**kw):
     'a=%E4%B8%AD%E6%96%87&b=A&b=B&b=123'
     '''
     args = []
-    for k, v in kw.iteritems():
-        if isinstance(v, basestring):
-            qv = v.encode('utf-8') if isinstance(v, unicode) else v
-            args.append('%s=%s' % (k, urllib.quote(qv)))
+    for k, v in kw.items():
+        if isinstance(v, str):
+            qv = v.encode('utf-8') if isinstance(v, str) else v
+            args.append('%s=%s' % (k, urllib.parse.quote(qv)))
         elif isinstance(v, collections.Iterable):
             for i in v:
-                qv = i.encode('utf-8') if isinstance(i, unicode) else str(i)
-                args.append('%s=%s' % (k, urllib.quote(qv)))
+                qv = i.encode('utf-8') if isinstance(i, str) else str(i)
+                args.append('%s=%s' % (k, urllib.parse.quote(qv)))
         else:
             qv = str(v)
-            args.append('%s=%s' % (k, urllib.quote(qv)))
+            args.append('%s=%s' % (k, urllib.parse.quote(qv)))
     return '&'.join(args)
 
 def _encode_multipart(**kw):
     ' build a multipart/form-data body with randomly generated boundary '
     boundary = '----------%s' % hex(int(time.time() * 1000))
     data = []
-    for k, v in kw.iteritems():
+    for k, v in kw.items():
         data.append('--%s' % boundary)
         if hasattr(v, 'read'):
             # file-like object:
@@ -90,7 +98,7 @@ def _encode_multipart(**kw):
             data.append(content)
         else:
             data.append('Content-Disposition: form-data; name="%s"\r\n' % k)
-            data.append(v.encode('utf-8') if isinstance(v, unicode) else v)
+            data.append(v.encode('utf-8') if isinstance(v, str) else v)
     data.append('--%s--\r\n' % boundary)
     return '\r\n'.join(data), boundary
 
@@ -144,22 +152,30 @@ def _http_call(the_url, method, authorization, **kw):
             the_url = the_url.replace('https://api.', 'https://rm.api.')
     http_url = '%s?%s' % (the_url, params) if method==_HTTP_GET else the_url
     http_body = None if method==_HTTP_GET else params
-    req = urllib2.Request(http_url, data=http_body)
+
+    logging.info("data: %s" % http_body)
+
+    http_body = http_body.encode("utf-8")
+
+    req = urllib.request.Request(http_url, data=http_body)
     req.add_header('Accept-Encoding', 'gzip')
     if authorization:
         req.add_header('Authorization', 'OAuth2 %s' % authorization)
     if boundary:
         req.add_header('Content-Type', 'multipart/form-data; boundary=%s' % boundary)
     try:
-        resp = urllib2.urlopen(req, timeout=5)
-        body = _read_body(resp)
+        resp = urllib.request.urlopen(req, timeout=5).read().decode('utf-8')
+        logging.info(resp)
+        # body = _read_body(resp)
+        body = resp
         r = _parse_json(body)
         if hasattr(r, 'error_code'):
             raise APIError(r.error_code, r.get('error', ''), r.get('request', ''))
         return r
-    except urllib2.HTTPError, e:
+    except urllib.error.HTTPError as e:
         try:
-            r = _parse_json(_read_body(e))
+            # r = _parse_json(_read_body(e))
+            r = _parse_json(body)
         except:
             r = None
         if hasattr(r, 'error_code'):
